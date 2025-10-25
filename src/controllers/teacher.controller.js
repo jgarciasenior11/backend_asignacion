@@ -1,6 +1,7 @@
 import Teacher from '../models/Teacher.js';
 import Career from '../models/Career.js';
 import Subject from '../models/Subject.js';
+import Jornada from '../models/Jornada.js';
 
 function toClientTeacher(doc) {
   return {
@@ -42,8 +43,51 @@ async function ensureSubjectsBelongToCareer(subjectIds, careerId) {
   return cleanIds;
 }
 
+async function getCoordinatorCareerCodes(user) {
+  if (!user || user.role !== 'coordinator') return null;
+
+  const jornadas = await Jornada.find({ managerId: user.id }).select('careerCode').lean();
+  const codes = new Set(
+    jornadas
+      .map((jornada) => jornada.careerCode)
+      .filter((code) => typeof code === 'string' && code.trim().length > 0)
+      .map((code) => code.trim()),
+  );
+
+  return Array.from(codes);
+}
+
+function hasCareerAccess(allowedCareers, careerId) {
+  if (!Array.isArray(allowedCareers)) return true;
+  if (!careerId) return false;
+  return allowedCareers.includes(careerId.trim());
+}
+
+function ensureCoordinatorHasAccess(res, allowedCareers, careerId) {
+  if (!Array.isArray(allowedCareers)) {
+    return true;
+  }
+
+  if (allowedCareers.length === 0 || !hasCareerAccess(allowedCareers, careerId)) {
+    res.status(403).json({ message: 'You do not have permission to manage teachers for this career' });
+    return false;
+  }
+
+  return true;
+}
+
 export async function listTeachers(req, res) {
-  const teachers = await Teacher.find().sort({ lastName: 1, firstName: 1 }).lean();
+  const filter = {};
+  let allowedCareers = null;
+  if (req.user?.role === 'coordinator') {
+    allowedCareers = await getCoordinatorCareerCodes(req.user);
+    if (!allowedCareers || allowedCareers.length === 0) {
+      return res.json([]);
+    }
+    filter.careerCode = { $in: allowedCareers };
+  }
+
+  const teachers = await Teacher.find(filter).sort({ lastName: 1, firstName: 1 }).lean();
   res.json(teachers.map(toClientTeacher));
 }
 
@@ -53,6 +97,14 @@ export async function getTeacher(req, res) {
   if (!teacher) {
     return res.status(404).json({ message: 'Teacher not found' });
   }
+
+  if (req.user?.role === 'coordinator') {
+    const allowedCareers = await getCoordinatorCareerCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedCareers, teacher.careerCode)) {
+      return;
+    }
+  }
+
   return res.json(toClientTeacher(teacher));
 }
 
@@ -68,6 +120,11 @@ export async function createTeacher(req, res) {
     const duplicate = await Teacher.findOne({ code: codeToUse });
     if (duplicate) {
       return res.status(409).json({ message: 'A teacher with this code already exists' });
+    }
+
+    const allowedCareers = await getCoordinatorCareerCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedCareers, careerId)) {
+      return;
     }
 
     await ensureCareer(careerId);
@@ -101,6 +158,11 @@ export async function updateTeacher(req, res) {
       return res.status(404).json({ message: 'Teacher not found' });
     }
 
+    const allowedCareers = await getCoordinatorCareerCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedCareers, teacher.careerCode)) {
+      return;
+    }
+
     if (code && code.trim() !== teacher.code) {
       const newCode = code.trim();
       const duplicate = await Teacher.findOne({ code: newCode, _id: { $ne: teacher._id } });
@@ -111,6 +173,9 @@ export async function updateTeacher(req, res) {
     }
 
     if (careerId && careerId.trim() !== teacher.careerCode) {
+      if (!ensureCoordinatorHasAccess(res, allowedCareers, careerId)) {
+        return;
+      }
       await ensureCareer(careerId);
       teacher.careerCode = careerId.trim();
     }
@@ -139,6 +204,11 @@ export async function deleteTeacher(req, res) {
   const teacher = await Teacher.findOne({ code: id });
   if (!teacher) {
     return res.status(404).json({ message: 'Teacher not found' });
+  }
+
+  const allowedCareers = await getCoordinatorCareerCodes(req.user);
+  if (!ensureCoordinatorHasAccess(res, allowedCareers, teacher.careerCode)) {
+    return;
   }
 
   await teacher.deleteOne();

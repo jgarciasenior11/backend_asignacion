@@ -28,10 +28,50 @@ async function ensureJornada(jornadaId) {
   }
 }
 
+async function getCoordinatorJornadaCodes(user) {
+  if (!user || user.role !== 'coordinator') return null;
+
+  const jornadas = await Jornada.find({ managerId: user.id }).select('code').lean();
+  const codes = new Set(
+    jornadas
+      .map((jornada) => jornada.code)
+      .filter((code) => typeof code === 'string' && code.trim().length > 0)
+      .map((code) => code.trim()),
+  );
+
+  return Array.from(codes);
+}
+
+function ensureCoordinatorHasAccess(res, allowedCodes, jornadaId) {
+  if (!Array.isArray(allowedCodes)) {
+    return true;
+  }
+
+  if (allowedCodes.length === 0 || !allowedCodes.includes(jornadaId?.trim())) {
+    res.status(403).json({ message: 'You do not have permission to manage this jornada' });
+    return false;
+  }
+
+  return true;
+}
+
 export async function listTimeSlots(req, res) {
   const { jornadaId } = req.query;
   const filter = {};
+  let allowedJornadas = null;
+
+  if (req.user?.role === 'coordinator') {
+    allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!allowedJornadas || allowedJornadas.length === 0) {
+      return res.json([]);
+    }
+    filter.jornadaCode = { $in: allowedJornadas };
+  }
+
   if (jornadaId) {
+    if (Array.isArray(allowedJornadas) && !ensureCoordinatorHasAccess(res, allowedJornadas, jornadaId)) {
+      return;
+    }
     filter.jornadaCode = jornadaId;
   }
   const timeSlots = await TimeSlot.find(filter).sort({ day: 1, start: 1 }).lean();
@@ -44,6 +84,14 @@ export async function getTimeSlot(req, res) {
   if (!timeSlot) {
     return res.status(404).json({ message: 'Time slot not found' });
   }
+
+  if (req.user?.role === 'coordinator') {
+    const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, timeSlot.jornadaCode)) {
+      return;
+    }
+  }
+
   return res.json(toClientTimeSlot(timeSlot));
 }
 
@@ -59,6 +107,11 @@ export async function createTimeSlot(req, res) {
     const duplicate = await TimeSlot.findOne({ code: codeToUse });
     if (duplicate) {
       return res.status(409).json({ message: 'A time slot with this code already exists' });
+    }
+
+    const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, jornadaId)) {
+      return;
     }
 
     await ensureJornada(jornadaId);
@@ -94,6 +147,11 @@ export async function updateTimeSlot(req, res) {
       return res.status(404).json({ message: 'Time slot not found' });
     }
 
+    const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, timeSlot.jornadaCode)) {
+      return;
+    }
+
     if (code && code.trim() !== timeSlot.code) {
       const newCode = code.trim();
       const duplicate = await TimeSlot.findOne({ code: newCode, _id: { $ne: timeSlot._id } });
@@ -104,6 +162,9 @@ export async function updateTimeSlot(req, res) {
     }
 
     if (jornadaId && jornadaId.trim() !== timeSlot.jornadaCode) {
+      if (!ensureCoordinatorHasAccess(res, allowedJornadas, jornadaId)) {
+        return;
+      }
       await ensureJornada(jornadaId);
       timeSlot.jornadaCode = jornadaId.trim();
     }
@@ -132,6 +193,11 @@ export async function deleteTimeSlot(req, res) {
 
   if (!timeSlot) {
     return res.status(404).json({ message: 'Time slot not found' });
+  }
+
+  const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+  if (!ensureCoordinatorHasAccess(res, allowedJornadas, timeSlot.jornadaCode)) {
+    return;
   }
 
   await timeSlot.deleteOne();

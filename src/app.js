@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import mongoose from 'mongoose';
+import authRoutes from './routes/auth.routes.js';
+import { authenticate, authorizeRoles } from './middleware/auth.js';
 import facultyRoutes from './routes/faculty.routes.js';
 import careerRoutes from './routes/career.routes.js';
 import subjectRoutes from './routes/subject.routes.js';
@@ -41,6 +43,10 @@ app.get('/database-test', async (req, res) => {
   }
 });
 
+app.use('/api/auth', authRoutes);
+
+app.use(authenticate);
+
 app.use('/api/faculties', facultyRoutes);
 app.use('/api/careers', careerRoutes);
 app.use('/api/subjects', subjectRoutes);
@@ -51,7 +57,7 @@ app.use('/api/sections', sectionRoutes);
 app.use('/api/jornadas', jornadaRoutes);
 app.use('/api/timeslots', timeSlotRoutes);
 app.use('/api/teachers', teacherRoutes);
-app.use('/api/users', userRoutes);
+app.use('/api/users', authorizeRoles('admin'), userRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/reports', reportRoutes);
 

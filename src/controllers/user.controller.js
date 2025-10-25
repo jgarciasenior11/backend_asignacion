@@ -9,7 +9,7 @@ function toClientUser(doc) {
     email: doc.email,
     role: doc.role,
     status: doc.status,
-    password: doc.password ?? '',
+    hasPassword: Boolean(doc.password),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };

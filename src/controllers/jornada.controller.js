@@ -47,7 +47,12 @@ async function ensureCoordinator(managerId) {
 }
 
 export async function listJornadas(req, res) {
-  const jornadas = await Jornada.find().sort({ name: 1 }).lean();
+  const filter = {};
+  if (req.user?.role === 'coordinator') {
+    filter.managerId = req.user.id;
+  }
+
+  const jornadas = await Jornada.find(filter).sort({ name: 1 }).lean();
   res.json(jornadas.map(toClientJornada));
 }
 
@@ -57,10 +62,18 @@ export async function getJornada(req, res) {
   if (!jornada) {
     return res.status(404).json({ message: 'Jornada not found' });
   }
+
+  if (req.user?.role === 'coordinator' && jornada.managerId !== req.user.id) {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
   return res.json(toClientJornada(jornada));
 }
 
 export async function createJornada(req, res) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+
   try {
     const { id, code, name, status, locationId, careerId, description, managerId } = req.body;
     const codeToUse = (code ?? id)?.trim();
@@ -93,6 +106,10 @@ export async function createJornada(req, res) {
 }
 
 export async function updateJornada(req, res) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+
   try {
     const { id } = req.params;
     const { code, name, status, locationId, careerId, description, managerId } = req.body;
@@ -146,6 +163,10 @@ export async function updateJornada(req, res) {
 }
 
 export async function deleteJornada(req, res) {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ message: 'Insufficient permissions' });
+  }
+
   const { id } = req.params;
   const jornada = await Jornada.findOne({ code: id });
 

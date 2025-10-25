@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import asyncHandler from '../utils/asyncHandler.js';
-import { getReports } from '../controllers/report.controller.js';
+import { login } from '../controllers/auth.controller.js';
 
 const router = Router();
 
-router.get('/assignments', asyncHandler(getReports));
+router.post('/login', asyncHandler(login));
 
 export default router;

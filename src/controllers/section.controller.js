@@ -32,10 +32,56 @@ async function ensureCoordinator(userId) {
   }
 }
 
+async function getCoordinatorJornadaCodes(user) {
+  if (!user || user.role !== 'coordinator') return null;
+
+  const jornadas = await Jornada.find({ managerId: user.id }).select('code').lean();
+  const codes = new Set(
+    jornadas
+      .map((jornada) => jornada.code)
+      .filter((code) => typeof code === 'string' && code.trim().length > 0)
+      .map((code) => code.trim()),
+  );
+
+  return Array.from(codes);
+}
+
+function hasJornadaAccess(allowedCodes, jornadaId) {
+  if (!Array.isArray(allowedCodes)) return true;
+  if (!jornadaId) return false;
+  return allowedCodes.includes(jornadaId.trim());
+}
+
+function ensureCoordinatorHasAccess(res, allowedCodes, jornadaId) {
+  if (!Array.isArray(allowedCodes)) {
+    return true;
+  }
+
+  if (allowedCodes.length === 0 || !hasJornadaAccess(allowedCodes, jornadaId)) {
+    res.status(403).json({ message: 'You do not have permission to manage sections for this jornada' });
+    return false;
+  }
+
+  return true;
+}
+
 export async function listSections(req, res) {
   const { jornadaId } = req.query;
   const filter = {};
+  let allowedJornadas = null;
+
+  if (req.user?.role === 'coordinator') {
+    allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!allowedJornadas || allowedJornadas.length === 0) {
+      return res.json([]);
+    }
+    filter.jornadaCode = { $in: allowedJornadas };
+  }
+
   if (jornadaId) {
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, jornadaId)) {
+      return;
+    }
     filter.jornadaCode = jornadaId;
   }
   const sections = await Section.find(filter).sort({ name: 1 }).lean();
@@ -47,6 +93,13 @@ export async function getSection(req, res) {
   const section = await Section.findOne({ code: id }).lean();
   if (!section) {
     return res.status(404).json({ message: 'Section not found' });
+  }
+
+  if (req.user?.role === 'coordinator') {
+    const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, section.jornadaCode)) {
+      return;
+    }
   }
   return res.json(toClientSection(section));
 }
@@ -63,6 +116,11 @@ export async function createSection(req, res) {
     const existing = await Section.findOne({ code: codeToUse });
     if (existing) {
       return res.status(409).json({ message: 'A section with this code already exists' });
+    }
+
+    const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, jornadaId)) {
+      return;
     }
 
     await ensureJornada(jornadaId);
@@ -106,6 +164,11 @@ export async function updateSection(req, res) {
       return res.status(404).json({ message: 'Section not found' });
     }
 
+    const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+    if (!ensureCoordinatorHasAccess(res, allowedJornadas, section.jornadaCode)) {
+      return;
+    }
+
     if (code && code.trim() !== section.code) {
       const newCode = code.trim();
       const duplicate = await Section.findOne({ code: newCode, _id: { $ne: section._id } });
@@ -116,6 +179,9 @@ export async function updateSection(req, res) {
     }
 
     if (jornadaId && jornadaId.trim() !== section.jornadaCode) {
+      if (!ensureCoordinatorHasAccess(res, allowedJornadas, jornadaId)) {
+        return;
+      }
       await ensureJornada(jornadaId);
       section.jornadaCode = jornadaId.trim();
     }
@@ -161,6 +227,11 @@ export async function deleteSection(req, res) {
 
   if (!section) {
     return res.status(404).json({ message: 'Section not found' });
+  }
+
+  const allowedJornadas = await getCoordinatorJornadaCodes(req.user);
+  if (!ensureCoordinatorHasAccess(res, allowedJornadas, section.jornadaCode)) {
+    return;
   }
 
   await section.deleteOne();
